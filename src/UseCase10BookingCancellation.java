@@ -1,19 +1,18 @@
 /**
  * BOOK MY STAY SYSTEM
- * FINAL VERSION – USE CASE 1 → 9
- * Version 9.0 (Error Handling & Validation)
+ * Version 10.0 – Full Lifecycle Management
+ * Covers Use Case 1 → 10
  */
 
 import java.util.*;
 
 
 /* ============================================================
-   CUSTOM EXCEPTION (Use Case 9 Core Concept)
+   CUSTOM EXCEPTION
    ============================================================ */
 
-class InvalidBookingException extends Exception {
-
-    public InvalidBookingException(String msg) {
+class BookingException extends Exception {
+    public BookingException(String msg) {
         super(msg);
     }
 }
@@ -34,28 +33,23 @@ abstract class Room {
     }
 
     public String getType() { return type; }
-
-    public abstract void display();
 }
 
 class SingleRoom extends Room {
     public SingleRoom(){ super("Single Room",2000); }
-    public void display(){ System.out.println("Single Room ₹2000"); }
 }
 
 class DoubleRoom extends Room {
     public DoubleRoom(){ super("Double Room",3500); }
-    public void display(){ System.out.println("Double Room ₹3500"); }
 }
 
 class SuiteRoom extends Room {
     public SuiteRoom(){ super("Suite Room",6000); }
-    public void display(){ System.out.println("Suite Room ₹6000"); }
 }
 
 
 /* ============================================================
-   INVENTORY WITH VALIDATION GUARD
+   INVENTORY (SAFE STATE MANAGEMENT)
    ============================================================ */
 
 class RoomInventory {
@@ -66,23 +60,26 @@ class RoomInventory {
         stock.put(type,count);
     }
 
-    public int available(String type) {
-        return stock.getOrDefault(type,-1);
-    }
-
-    public void reduce(String type) throws InvalidBookingException {
-
-        int avail = stock.getOrDefault(type,-1);
-
-        if(avail <= 0)
-            throw new InvalidBookingException(
-                    "No inventory available for "+type);
-
-        stock.put(type,avail-1);
-    }
-
-    public boolean isValidRoomType(String type) {
+    public boolean validType(String type) {
         return stock.containsKey(type);
+    }
+
+    public int available(String type) {
+        return stock.getOrDefault(type,0);
+    }
+
+    public void reduce(String type) throws BookingException {
+
+        int a = stock.getOrDefault(type,-1);
+
+        if(a<=0)
+            throw new BookingException("No rooms available for "+type);
+
+        stock.put(type,a-1);
+    }
+
+    public void increase(String type) {
+        stock.put(type, stock.get(type)+1);
     }
 
     public void show() {
@@ -102,10 +99,11 @@ class Reservation {
     private String guest;
     private String type;
     private String id;
+    private boolean cancelled=false;
 
     public Reservation(String guest,String type) {
-        this.guest = guest;
-        this.type = type;
+        this.guest=guest;
+        this.type=type;
     }
 
     public String getGuest(){ return guest; }
@@ -114,8 +112,36 @@ class Reservation {
     public void setId(String id){ this.id=id; }
     public String getId(){ return id; }
 
+    public boolean isCancelled(){ return cancelled; }
+    public void cancel(){ cancelled=true; }
+
     public String toString(){
-        return id+" | "+guest+" | "+type;
+        return id+" | "+guest+" | "+type+
+                (cancelled?" | CANCELLED":"");
+    }
+}
+
+
+/* ============================================================
+   VALIDATOR (FAIL FAST)
+   ============================================================ */
+
+class BookingValidator {
+
+    private RoomInventory inventory;
+
+    public BookingValidator(RoomInventory inventory){
+        this.inventory=inventory;
+    }
+
+    public void validate(Reservation r)
+            throws BookingException {
+
+        if(r.getGuest()==null || r.getGuest().trim().isEmpty())
+            throw new BookingException("Invalid guest name");
+
+        if(!inventory.validType(r.getType()))
+            throw new BookingException("Invalid room type");
     }
 }
 
@@ -128,69 +154,39 @@ class BookingQueue {
 
     private Queue<Reservation> q = new LinkedList<>();
 
-    public void add(Reservation r){
-        q.offer(r);
-    }
-
-    public Reservation next(){
-        return q.poll();
-    }
-
-    public boolean empty(){
-        return q.isEmpty();
-    }
+    public void add(Reservation r){ q.offer(r); }
+    public Reservation next(){ return q.poll(); }
+    public boolean empty(){ return q.isEmpty(); }
 }
 
 
 /* ============================================================
-   VALIDATOR SERVICE (Fail-Fast Design)
-   ============================================================ */
-
-class BookingValidator {
-
-    private RoomInventory inventory;
-
-    public BookingValidator(RoomInventory inventory){
-        this.inventory = inventory;
-    }
-
-    public void validate(Reservation r)
-            throws InvalidBookingException {
-
-        if(r.getGuest()==null || r.getGuest().trim().isEmpty())
-            throw new InvalidBookingException("Guest name invalid");
-
-        if(!inventory.isValidRoomType(r.getType()))
-            throw new InvalidBookingException(
-                    "Invalid room type selected: "+r.getType());
-    }
-}
-
-
-/* ============================================================
-   BOOKING SERVICE WITH ERROR HANDLING
+   BOOKING SERVICE
    ============================================================ */
 
 class BookingService {
 
     private RoomInventory inventory;
     private Set<String> allocated = new HashSet<>();
+    private Map<String,Reservation> confirmed =
+            new HashMap<>();
 
     public BookingService(RoomInventory inventory){
-        this.inventory = inventory;
+        this.inventory=inventory;
     }
 
     public Reservation confirm(Reservation r)
-            throws InvalidBookingException {
+            throws BookingException {
 
         inventory.reduce(r.getType());
 
         String id = generateId(r.getType());
-
         r.setId(id);
-        allocated.add(id);
 
-        System.out.println("Booking Confirmed → "+r);
+        allocated.add(id);
+        confirmed.put(id,r);
+
+        System.out.println("Confirmed → "+r);
 
         return r;
     }
@@ -206,11 +202,15 @@ class BookingService {
 
         return id;
     }
+
+    public Reservation getReservation(String id){
+        return confirmed.get(id);
+    }
 }
 
 
 /* ============================================================
-   ADD-ON SERVICE (Use Case 7)
+   ADD-ON SERVICES
    ============================================================ */
 
 class AddOnService {
@@ -232,15 +232,12 @@ class AddOnManager {
             new HashMap<>();
 
     public void add(String id,AddOnService s){
-
-        map.computeIfAbsent(id,k->new ArrayList<>())
-                .add(s);
+        map.computeIfAbsent(id,k->new ArrayList<>()).add(s);
     }
 
     public double total(String id){
 
         double t=0;
-
         List<AddOnService> list = map.get(id);
 
         if(list!=null)
@@ -253,7 +250,7 @@ class AddOnManager {
 
 
 /* ============================================================
-   BOOKING HISTORY (Use Case 8)
+   BOOKING HISTORY
    ============================================================ */
 
 class BookingHistory {
@@ -266,6 +263,43 @@ class BookingHistory {
 
     public List<Reservation> all(){
         return list;
+    }
+}
+
+
+/* ============================================================
+   CANCELLATION SERVICE (Use Case 10 CORE)
+   ============================================================ */
+
+class CancellationService {
+
+    private RoomInventory inventory;
+    private Stack<String> rollbackStack = new Stack<>();
+
+    public CancellationService(RoomInventory inventory){
+        this.inventory=inventory;
+    }
+
+    public void cancel(Reservation r)
+            throws BookingException {
+
+        if(r==null)
+            throw new BookingException("Reservation not found");
+
+        if(r.isCancelled())
+            throw new BookingException("Already cancelled");
+
+        rollbackStack.push(r.getId());
+
+        inventory.increase(r.getType());
+
+        r.cancel();
+
+        System.out.println("Cancellation Successful → "+r.getId());
+    }
+
+    public void showRollbackStack(){
+        System.out.println("Rollback Stack → "+rollbackStack);
     }
 }
 
@@ -290,7 +324,7 @@ class ReportService {
    MAIN APPLICATION
    ============================================================ */
 
-public class UseCase9ErrorHandlingValidation {
+public class UseCase10BookingCancellation {
 
     public static void main(String[] args){
 
@@ -301,14 +335,18 @@ public class UseCase9ErrorHandlingValidation {
         inventory.addType("Double Room",1);
         inventory.addType("Suite Room",1);
 
-        BookingQueue queue = new BookingQueue();
         BookingValidator validator =
                 new BookingValidator(inventory);
+
+        BookingQueue queue = new BookingQueue();
         BookingService booking =
                 new BookingService(inventory);
 
         AddOnManager addOn = new AddOnManager();
         BookingHistory history = new BookingHistory();
+        CancellationService cancelService =
+                new CancellationService(inventory);
+
         ReportService report = new ReportService();
 
         System.out.print("Enter booking count: ");
@@ -333,11 +371,8 @@ public class UseCase9ErrorHandlingValidation {
             try {
 
                 validator.validate(r);
-
-                Reservation confirmed =
-                        booking.confirm(r);
-
-                history.store(confirmed);
+                Reservation c = booking.confirm(r);
+                history.store(c);
 
                 System.out.print("Add-on count: ");
                 int s = sc.nextInt();
@@ -352,24 +387,39 @@ public class UseCase9ErrorHandlingValidation {
                     double cost = sc.nextDouble();
                     sc.nextLine();
 
-                    addOn.add(confirmed.getId(),
+                    addOn.add(c.getId(),
                             new AddOnService(name,cost));
                 }
 
                 System.out.println("Add-on Total ₹"+
-                        addOn.total(confirmed.getId()));
+                        addOn.total(c.getId()));
 
             }
-            catch(InvalidBookingException ex){
-
+            catch(BookingException ex){
                 System.out.println("Booking Error → "
                         +ex.getMessage());
             }
         }
 
+        /* ===== CANCELLATION FLOW ===== */
+
+        System.out.print("\nEnter Reservation ID to cancel: ");
+        String cid = sc.nextLine();
+
+        try {
+            cancelService.cancel(
+                    booking.getReservation(cid));
+        }
+        catch(BookingException ex){
+            System.out.println("Cancellation Error → "
+                    +ex.getMessage());
+        }
+
+        cancelService.showRollbackStack();
+
         inventory.show();
         report.show(history.all());
 
-        System.out.println("\nSystem completed safely");
+        System.out.println("\nSystem finished safely");
     }
 }
